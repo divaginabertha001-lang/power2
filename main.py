@@ -1,21 +1,13 @@
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from ytmusicapi import YTMusic
 import logging
-import uvicorn
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ytmusic-backend")
+logger = logging.getLogger("power2-backend")
 
-app = FastAPI(title="TubeTune YTMusic Proxy (Anonymous)")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 try:
     ytmusic = YTMusic()  # anonymous
@@ -24,10 +16,13 @@ except Exception as e:
     logger.exception("Failed to initialize YTMusic: %s", e)
     ytmusic = None
 
-@app.get("/api/youtube/search")
-def youtube_search(q: str = Query(..., description="search query")):
+@app.route("/search")
+def search():
+    q = request.args.get("query") or request.args.get("q")
+    if not q:
+        return jsonify({"error": "missing query"}), 400
     if ytmusic is None:
-        raise HTTPException(status_code=500, detail="YTMusic not initialized")
+        return jsonify({"error": "ytmusic not initialized"}), 500
     try:
         results = ytmusic.search(q, filter="songs")
         out = []
@@ -35,74 +30,50 @@ def youtube_search(q: str = Query(..., description="search query")):
             out.append({
                 "title": r.get("title"),
                 "videoId": r.get("videoId") or r.get("id"),
-                "artists": r.get("artists", []),
+                "artists": [a.get("name") for a in r.get("artists", [])] if r.get("artists") else [],
                 "duration": r.get("duration"),
                 "thumbnails": r.get("thumbnails", [])
             })
-        return out
+        return jsonify(out)
     except Exception as e:
-        logger.exception("youtube_search error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("search error: %s", e)
+        return jsonify({"error": str(e)}), 500
 
-@app.get("/api/youtube/playlists/search")
-def youtube_playlists_search(q: str = Query(..., description="playlist search query")):
+@app.route("/playlists/<playlist_id>")
+def playlist(playlist_id):
     if ytmusic is None:
-        raise HTTPException(status_code=500, detail="YTMusic not initialized")
-    try:
-        results = ytmusic.search(q, filter="playlists")
-        out = []
-        for r in results:
-            out.append({
-                "title": r.get("title"),
-                "playlistId": r.get("playlistId") or r.get("id"),
-                "thumbnails": r.get("thumbnails", [])
-            })
-        return out
-    except Exception as e:
-        logger.exception("youtube_playlists_search error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/youtube/playlists/{playlist_id}")
-def youtube_playlist_details(playlist_id: str):
-    if ytmusic is None:
-        raise HTTPException(status_code=500, detail="YTMusic not initialized")
+        return jsonify({"error": "ytmusic not initialized"}), 500
     try:
         data = ytmusic.get_playlist(playlist_id, limit=200)
-        if not data:
-            raise HTTPException(status_code=404, detail="Playlist not found")
-        return data
+        return jsonify(data or {})
     except Exception as e:
-        logger.exception("youtube_playlist_details error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("playlist error: %s", e)
+        return jsonify({"error": str(e)}), 500
 
-@app.get("/api/playlists/{playlist_id}")
-def get_playlist(playlist_id: str):
-    return youtube_playlist_details(playlist_id)
-
-@app.get("/api/playlists/{playlist_id}/tracks")
-def get_playlist_tracks(playlist_id: str):
+@app.route("/playlists/<playlist_id>/tracks")
+def playlist_tracks(playlist_id):
     if ytmusic is None:
-        raise HTTPException(status_code=500, detail="YTMusic not initialized")
+        return jsonify({"error": "ytmusic not initialized"}), 500
     try:
         data = ytmusic.get_playlist(playlist_id, limit=200)
         tracks = data.get("tracks", []) if data else []
-        normalized = []
+        out = []
         for t in tracks:
-            normalized.append({
+            out.append({
                 "title": t.get("title"),
-                "videoId": t.get("videoId") or t.get("videoId"),
-                "artists": t.get("artists", []),
+                "videoId": t.get("videoId"),
+                "artists": [a.get("name") for a in t.get("artists", [])] if t.get("artists") else [],
                 "duration": t.get("duration"),
                 "thumbnail": (t.get("thumbnails") or [{}])[-1].get("url") if t.get("thumbnails") else None
             })
-        return {"tracks": normalized}
+        return jsonify({"tracks": out})
     except Exception as e:
-        logger.exception("get_playlist_tracks error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("playlist_tracks error: %s", e)
+        return jsonify({"error": str(e)}), 500
 
-@app.get("/")
+@app.route("/")
 def root():
-    return {"status": "ok"}
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=5000, log_level="info")
+    app.run(host="0.0.0.0", port=5000)
