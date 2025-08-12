@@ -1,3 +1,4 @@
-fastapi
-uvicorn[standard]
+Flask
+flask-cors
 ytmusicapi
+gunicorn
